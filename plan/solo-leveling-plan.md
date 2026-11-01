@@ -1,6 +1,6 @@
-# Solo Leveling — level-up layer of lifeD (plan v6)
+# Solo Leveling — level-up layer of lifeD (plan v7)
 
-Status: **plan only, no code.** v6 = v5 + owner answers (gym + home, anime
+Status: **plan only, no code.** v7 = v6 + review round 5 (safer quest ladder, settings as events). v6 added owner answers (gym + home, anime
 stats, the Daily Quest goal) + "everything changeable by chat". History: §13.
 lifeD records: goal **#470** (the Daily Quest), project **#471** (this build).
 
@@ -31,13 +31,17 @@ lifeD records: goal **#470** (the Daily Quest), project **#471** (this build).
    server structures"; you said yes to keeping it for now). A share is saved
    raw; Claude structures it in your next chat. Gemma for the 500-reel
    backlog is re-decided in L2.
-6. **Everything is changeable by talking.** Code holds the *shape* (Zod
-   schema), the *defaults* and the tests. Every number you might want to change
-   — quest ladder, rank-up rule, XP weights, stat sources, ranker weights,
-   phase rules, avoids, `have`, quiet hours — lives in an unpinned record that
-   overrides the default. "Make the quest 80 push-ups" or "count cycling as
-   AGI" is one `write`; an edit that doesn't fit the schema is refused with a
-   message that says why, so nothing breaks silently.
+6. **Everything is changeable by talking.** Code (`src/level/`) holds the
+   *shape* (Zod schemas), the *defaults* and the tests. A change is a
+   **`setting` log event** (`form: setting`, required `key` + `value`): "make
+   the quest 80 push-ups" or "count cycling as AGI" is one `write`. The latest
+   event per key wins, and its timestamp gives history and "applies from
+   today" for free. `src/level/` validates overrides **on read**; an invalid
+   one falls back to the default and the next push / `suggest` line says
+   which setting was ignored and why. Core `write` stays untouched.
+   **Tunable keys (the one list):** quest targets, progression %, deload,
+   run-walk ratio, XP weights, stat sources, ranker weights, phase rules,
+   avoids/triggers, `have`, quiet hours, side-quest preferences.
 
 ## 1. Name and theme
 
@@ -54,12 +58,13 @@ before anything public (someone else's trademark).
 | Exercise / routine | `kind: exercise` (muscles, equipment, cues, source) / `kind: routine` (exercise list in body) | schema |
 | Shared link waiting | `kind: inbox` (exists) · props: url, platform, status, reason · raw text in body | — |
 | Meal | `form: meal` → data: slot, portion, rating, felt · refs the recipe | form record |
-| Workout | `form: workout` → `data.ex: [{ref:"$bench", sets:[[8,40],[8,40],[6,42.5]]}]`, mode, min, rpe, energy · one `event_refs` row per exercise | form record |
+| Workout | `form: workout` → `refs: ["bench press","overhead press"]` (exact titles) + `data.ex: [{ex:"bench press", sets:[[8,40],[8,40],[6,42.5]]}]`, mode, min, rpe, energy (matched to refs by title in code) | form record |
+| Quest | `form: quest` → `numbers: push, core, squat, run_km, walk_km` · several per day allowed; **the day's total = sum of that day's quest events** | form record |
+| Setting | `form: setting` → `key`, `value` (Decision 6) | form record |
 | Check-in | `form: checkin` → mood 1–5, energy 1–5, sleep_h, stress 1–5, gut 0–5 | form record |
 | Weight, symptoms, meds | as today (metric events, Food & Health assistant) | — |
 | URL dedupe | one small system table `urls(canonical PK, ent)` (a mechanic, like `notified`) | migration |
-| Food-flag map (~150 foods), Zod extraction schema, XP table | **TypeScript constants in `src/level/`, unit-tested** | yes |
-| Things you tune by chat: phase, `have`, avoids/triggers, ranker weights, quest preferences | **unpinned** records, looked up by title | — |
+| Food-flag map (~150 foods), Zod schemas, XP table, quest defaults | **TypeScript constants in `src/level/` (defaults), unit-tested**; overridden by `setting` events | yes |
 | Pinned | **one** rule ≤ 220 chars pointing to the above (pinned rules ride in every chat) | — |
 
 FTS uses `unicode61` without stemming: store singular canonical names and
@@ -72,9 +77,10 @@ normalise query words the same way ("eggs" → "egg").
 | `source` | `url` → raw caption/description/transcript + metadata, screenshots as MCP image content, or "already saved #id". (Not `fetch`, so Claude doesn't confuse it with its own web fetch.) |
 | `suggest` | `{for: meal\|workout, slot?, treat?, minutes?}` → 3 options with a one-line why, video link and `/app` link. |
 
-`context()` gains one line only after L3: `Lv 7 · STR 12 VIT 15 AGI 6 SEN 9 ·
-quests 2/4` (≤ 60 tokens, measured with `scripts/smoke.mjs`). Before that it
-gains "N shares waiting — structure them?".
+`context()` gains at most two short lines (≤ 60 tokens together, measured
+with `scripts/smoke.mjs`): from L1 "N shares waiting — structure them?"; from
+L1b `Quest (C): push 32/50 · core 20/50 · squat 0/70 · 3.1/5 km`; from L3 the
+stats are appended to that line: `Lv 7 · STR 12 AGI 6 VIT 15 INT 20 SEN 9`.
 
 ## 3. Food
 
@@ -105,45 +111,55 @@ gains "N shares waiting — structure them?".
 
 ## 4. Training
 
-### 4.1 The Daily Quest (goal #470) — starts in week 1, not after L3
+### 4.1 The Daily Quest (goal #470) — starts in week 0, not after L3
 
-Goal: 100 push-ups · 100 sit-ups · 100 squats · 10 km — by January 2027.
-Gym and home both, so the quest needs no equipment; gym days add strength work.
+**Goal:** 100 push-ups · 100 core · 100 squats · 10 km. **January milestone
+(honest version):** one full **S-rank day** — 100/100/100 in any number of
+sets + 10 km moved (run + walk) — plus a separate **5 km run-walk test**.
+Daily S and a 10 km run-walk are the Feb–Mar goals. Gym and home both: the
+quest needs no equipment; gym days add strength work (§4.2).
 
-**Rank ladder** (anime hunter ranks; every number editable by chat):
+**Week 0 (first week after the doctor's OK; ideally after the iron injection
+#438 — Nov 2–8 if both are done):** baseline on day 1 and day 7 (max push-ups,
+max core reps, max squats, each 2 min; easy 2 km run-walk, time it). Light
+practice only, no progression yet.
 
-| Rank | Push-ups | Sit-ups | Squats | Distance |
-| :-- | --: | --: | --: | --: |
-| E | 20 | 20 | 30 | 2 km |
-| D | 35 | 35 | 50 | 3 km |
-| C | 50 | 50 | 70 | 4–5 km |
-| B | 70 | 70 | 85 | 6 km |
-| A | 85 | 85 | 100 | 8 km |
-| **S** | **100** | **100** | **100** | **10 km** |
+**Daily targets grow from *your* baseline, not a fixed table:**
+- Reps: start at **1.5 × baseline max**, spread through the day. Each
+  **qualifying week** adds **+10 % (at least +5)**, capped at 100.
+- Distance moved: start at **1.2 × your current daily km**, +10 % per
+  qualifying week, to 10 km. Running part: run-walk intervals, run minutes
+  +10 % a week, at most **one longer day** a week, **no running on
+  symptomatic days**.
+- **Deload every 4th week:** targets −30 %, nothing lost.
+- **Core 100** = any mix of crunches, dead bugs, leg raises, planks (10 s = 1
+  rep) — easier on the gut than 100 straight sit-ups.
 
-- Reps in any number of sets through the day. Knee/incline push-ups count up
-  to C; full push-ups from B.
-- **Start rank** from a baseline on day 1: max push-ups, sit-ups, squats (2 min
-  each), and an easy 2 km run/walk.
-- **Rank up** next Monday when you clear ≥ 5 of the week's quest days (flare
-  and planned rest days are left out of the count). **Never rank down.**
-  E→S in 6 steps fits the 9 weeks from Nov 3 to Jan 4 with a week to spare.
-- **Distance, honestly:** 10 km of *running every day* is ~70 km a week —
-  months of build-up for most people, and riskier with Crohn's, low iron
-  (injection still pending, #438) and low vitamin D (bone stress). So the
-  daily quest counts **10 km moved** (run + walk, ~13k steps), with the
-  *running* part growing about 10–15 % a week. **January milestone = one full
-  S-rank day: 100/100/100 + 10 km run (run-walk allowed).** Daily 10 km
-  *running* becomes the next goal when you say so.
-- **Body first:** a quick OK from your doctor before starting. Sit-ups → dead
-  bugs or planks if your gut complains. Abdominal pain or a flare → stop;
-  that day is a **Recovery Quest** and still counts. One or two rest days a
-  week are quest days too.
-- **Logging:** "quest: 50/50/70, 4.2 km" → one `write` → a `quest` event
-  (a `form` record, zero code). Run distance from any phone app, typed or
-  later via Health Connect.
-- **The System for the quest (small code, L1b):** the 08:00 push carries
-  today's quest at your rank; rank-ups are announced ("[SYSTEM] Rank up: D → C").
+**Rank = title from today's targets** (anime bands; editable): E < 30 · D 30–49
+· C 50–69 · B 70–84 · A 85–99 · **S 100 + 10 km**.
+
+**A qualifying week** = ≥ 4 *real* cleared days (the day's summed quest events
+meet all four targets) **and** mean energy check-in ≥ 3 **and** no pain flag.
+- **Recovery and rest days protect your streak and XP but never count toward
+  progression.** Seven flare days don't level the quest; they just don't hurt.
+- **The title never goes down; today's target can.** After ≥ 4 days without a
+  cleared quest (flare, illness, infusion, travel), the target steps back one
+  band for a week — **"Re-awakening"** — then resumes.
+
+**Body first:** doctor's OK before week 0. Tell the doctor about the new
+training before blood tests: high-rep work raises CK, and Upadacitinib can
+too. Stop on abdominal pain, dizziness or dark urine; hydrate on high-rep
+days. A flare day is a **Recovery Quest** (rest, meds, fluids, soft food, log
+symptoms).
+
+**Logging:** "quest: 30 push, 25 core, 2.1 km walk" any number of times a day
+→ `quest` events; the day's total is their sum. Distance from any phone app,
+typed, or later via Health Connect.
+
+**L1b (small code, ships with its guardrails):** today's targets + title in
+the 08:00 push and in `context()`; weekly progression and deload; rank-up
+announcement ("[SYSTEM] Rank up: D → C"); **Recovery Quest on flare, low-mood
+shrink, quiet mode / no pushes after 21:00** — these move here from L3.
 
 ### 4.2 Gym and strength
 
@@ -170,20 +186,22 @@ Gym and home both, so the quest needs no equipment; gym days add strength work.
   ("log your meals", never "eat 80 g protein") — restrictive eating is a real
   risk with IBD and flares cut appetite.
 - **Stats (the anime set, kept):** STR (quest push-ups/squats, strength
-  sessions, PRs) · AGI (quest distance, cardio, mobility) · VIT (sit-ups/core,
+  sessions, PRs) · AGI (quest distance, cardio, mobility) · VIT (core reps,
   meals logged, sleep logged, meds taken) · SEN (check-ins, journal) · INT
   (lifeD tasks done, learning — **on**; never lowers anything; "stop counting
   work" by chat turns it off).
 - **Never goes down:** a nightly rollup stores XP per day (rebuildable);
   today is computed live. Level = max(high-water mark, computed). XP-table
   changes apply from today, versioned.
-- **Daily Quest** in the 08:00 push: 3–4 small logging/doing items from your
-  quest preferences. **Flare = Recovery Quest** (rest, meds, fluids, soft food,
-  log symptoms) and counts as a full day.
-- **Low mood:** if mood ≤ 2 on 3 of your last 5 check-ins, quests shrink to one
-  item and the System says once, plainly: talk to <the person you name> or
-  Tele-MANAS (free, 24×7, India: **14416**). Not repeated daily.
-- **Quiet:** "pause the System for a week" by chat; no level-up pushes after 21:00.
+- **Side quests** in the 08:00 push (separate from the fitness Daily Quest):
+  2–3 small logging/doing items from your side-quest preferences ("log your
+  meals", "evening check-in").
+- **Guardrails (already live since L1b, §4.1):** flare = Recovery Quest that
+  protects streak and XP; **low mood** — if mood ≤ 2 on 3 of your last 5
+  check-ins, quests shrink to one item and the System says once, plainly:
+  talk to <the person you name> or Tele-MANAS (free, 24×7, India: **14416**),
+  not repeated daily; **quiet** — "pause the System for a week" by chat, no
+  pushes after 21:00.
 - Flags, not medical advice; your doctor overrides everything.
 
 ## 7. Android
@@ -204,19 +222,23 @@ or a widget.
 - Dated STATUS/DESIGN entries: the `src/level/` domain-module exception; and
   later, the server-side-LLM decision if you say yes.
 - New bindings over time: Browser Run (L1), Workflows (L2 backlog), Workers
-  AI + AI Gateway (only if §12 Q1 = yes).
+  AI + AI Gateway (only if you allow server-side AI for the backlog in L2).
 
 ## 9. Phases
 
-**Step zero (½ day):** merge the live branch to `main`; Paid-plan doc fixes.
+**Step zero (½ day):** merge the live branch to `main`; confirm migrations
+`0008` and `0009` are applied to the remote D1 (STATUS says 0008 was pending)
+before seeding new forms; Paid-plan doc fixes.
 
 **Day 1 — spikes:** 20 reels through Browser Run (pass = ≥ 14 full captions);
 phone share tests (link → inbox; screenshot path).
 
-**Quest track (parallel, from week 1 — the January deadline can't wait):**
-`quest` form + rank-ladder record seeded on day 1 (zero code; Claude reads the
-ladder and your logs and tells you today's quest). **L1b (~1 day):** today's
-quest + rank in the 08:00 push and in `context()`; rank-up rule; announcement.
+**Quest track (parallel, from week 0 — the January milestone can't wait):**
+`quest`, `checkin` and `setting` forms seeded on day 1 (zero code; Claude reads
+the defaults + your baseline + logs and tells you today's targets). **L1b
+(~1 day):** targets + title in the 08:00 push and `context()`; weekly
+progression, deload, Re-awakening; rank-up announcement; the guardrails
+(Recovery Quest, low-mood shrink, quiet mode).
 
 **L1 — capture + log (~2 days):** kinds + forms seeded (recipe, exercise,
 routine; meal, workout, checkin, quest); share URL → `inbox` + raw fetch; `urls`
@@ -225,12 +247,12 @@ dedupe; `source` tool; Recipe page with "Cooked it"; one pinned pointer rule.
 chat; meals, workouts and check-ins log by chat.
 
 **L2 — decide + backlog (week 2):** `suggest {for: meal}` + treat mode;
-cooking mode; backlog import; §12 Q1 decision (Gemma or not).
+cooking mode; backlog import; re-decide server-side AI (Gemma) for the backlog.
 *Done when:* "what should I eat?" gives 3 dishes you'd cook, none eaten in 4
 days, phase rules respected; every saved reel is searchable.
 
 **L3 — The System (after ≥ 2 weeks of logs):** XP rollup, stats, level,
-quests, Status screen, guardrails.
+side quests, Status screen.
 
 **L4 — Training:** `suggest {for: workout}`, PRs, routine from reels.
 
@@ -242,20 +264,22 @@ quests, Status screen, guardrails.
 | :-- | :-- |
 | The new layer damages your life memory | Writes only through `write`; `src/level/` isolated; nightly R2 backup; tests |
 | Every chat pays for it | 2 new tools; one ≤ 220-char pinned rule; no settings in pinned rules; measured |
-| Gamification becomes pressure or disordered eating | XP for logging not values; no intake targets; never down; flare = full day; low-mood step; quiet mode |
+| Gamification becomes pressure or disordered eating | XP for logging not values; no intake targets; title never down; flare protects streak; low-mood step; quiet mode |
+| Training too fast (rhabdomyolysis, bone stress, flare) | Baseline-based targets; +10 %/week; deload every 4th week; Re-awakening after breaks; doctor's OK; CK caveat before blood tests |
 | Instagram blocks Browser Run | Day-1 spike; screenshot path; home-connection backlog |
 | Building on stale code | Step zero merges the live branch first |
 
 ## 11. Before Day 1 (you)
 
 20 reel links with recipes in the caption · YouTube Data API key · ntfy topic
-(lifeD's) · answers to §12.
+(lifeD's) · **doctor's OK for the quest** · **date of the iron injection
+(#438)** · the week-0 baseline (day 1 and day 7) · answers to §12.
 
 ## 12. Questions only you can answer
 
 Answered: no server-side AI in L1 (re-decide for the backlog in L2); gym +
-home; anime stats kept; INT counts work; first goal = the Daily Quest by
-January (#470); everything tunable by chat.
+home; anime stats kept; INT counts work; first goal = the Daily Quest, January milestone = one S-rank day (#470)
++ 5 km run-walk test; everything tunable by chat.
 
 Still open (all have defaults; change any time by chat):
 1. Foods or exercises your doctor told you to avoid? OK with the grapefruit +
@@ -290,3 +314,13 @@ Still open (all have defaults; change any time by chat):
   by chat (code = schema + defaults + tests, records = overrides). lifeD
   records #470/#471 created. Moving this plan into lifeD's `docs/` needs push
   access to `omesh7/lifed`, which this session was denied.
+- **Review round 5 → v7 (accepted):** baseline-based targets (1.5 × max,
+  +10 %/qualifying week, deload every 4th week) instead of a fixed weekly
+  ladder; week 0 after the doctor's OK and ideally the iron injection;
+  qualifying week = ≥ 4 real cleared days + energy ≥ 3 + no pain; recovery/rest
+  days protect but never progress; title never down, target steps back after
+  breaks ("Re-awakening"); core 100 instead of sit-ups; January = one S-rank
+  day + a 5 km run-walk test; CK caveat; guardrails moved into L1b; tunables
+  as `setting` log events validated on read (core `write` untouched); workout
+  refs by exact title; quest form with run/walk split and daily sum; "Side
+  quests" renamed; one tunables list; step zero confirms migrations 0008/0009.
