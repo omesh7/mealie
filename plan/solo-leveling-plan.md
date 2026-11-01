@@ -1,6 +1,6 @@
-# Solo Leveling — level-up layer of lifeD (plan v7)
+# Solo Leveling — level-up layer of lifeD (plan v8 — final, ready to build)
 
-Status: **plan only, no code.** v7 = v6 + review round 5 (safer quest ladder, settings as events). v6 added owner answers (gym + home, anime
+Status: **plan only, no code.** v8 = v7 + review round 6 (final gate passed). v7 = round 5 (safer quest ladder, settings as events). v6 added owner answers (gym + home, anime
 stats, the Daily Quest goal) + "everything changeable by chat". History: §13.
 lifeD records: goal **#470** (the Daily Quest), project **#471** (this build).
 
@@ -16,11 +16,11 @@ lifeD records: goal **#470** (the Daily Quest), project **#471** (this build).
 2. **Build on the live branch, not `main`.** lifeD's deployed code (Worker
    `db29e580`, 5 tools incl. `spend`, *formats as data*) is on branch
    `ccr-7a2881ef-38kr1m` (2026-10-17). `main` stops at `ea83e74` (2026-09-28).
-   **Step zero: merge that branch into `main`.**
+   **Done 2026-11-01:** `main` fast-forwarded to it (`ea83e74` → `c110435`).
 3. **Use lifeD's "formats as data" (already shipped):** a `kind` record can
    carry `props.schema`, enforced by `write`; a `form` record (title = a log
-   type) fixes the shape of that log's data. So `meal`, `workout`, `checkin`
-   are just `form` records, and `recipe`, `exercise`, `routine` are just `kind`
+   type) fixes the shape of that log's data. So `meal`, `workout`, `checkin`,
+   `quest` and `setting` are just `form` records, and `recipe`, `exercise`, `routine` are just `kind`
    records. **Logging needs no new code.**
 4. **Declare the domain module honestly.** lifeD says "no domain logic in
    code". A recipe ranker, an importer and an XP engine *are* domain logic.
@@ -61,7 +61,7 @@ before anything public (someone else's trademark).
 | Workout | `form: workout` → `refs: ["bench press","overhead press"]` (exact titles) + `data.ex: [{ex:"bench press", sets:[[8,40],[8,40],[6,42.5]]}]`, mode, min, rpe, energy (matched to refs by title in code) | form record |
 | Quest | `form: quest` → `numbers: push, core, squat, run_km, walk_km` · several per day allowed; **the day's total = sum of that day's quest events** | form record |
 | Setting | `form: setting` → `key`, `value` (Decision 6) | form record |
-| Check-in | `form: checkin` → mood 1–5, energy 1–5, sleep_h, stress 1–5, gut 0–5 | form record |
+| Check-in | `form: checkin` → mood 1–5, energy 1–5, sleep_h, stress 1–5, gut 0–5, pain 0–3 | form record |
 | Weight, symptoms, meds | as today (metric events, Food & Health assistant) | — |
 | URL dedupe | one small system table `urls(canonical PK, ent)` (a mechanic, like `notified`) | migration |
 | Food-flag map (~150 foods), Zod schemas, XP table, quest defaults | **TypeScript constants in `src/level/` (defaults), unit-tested**; overridden by `setting` events | yes |
@@ -116,7 +116,10 @@ stats are appended to that line: `Lv 7 · STR 12 AGI 6 VIT 15 INT 20 SEN 9`.
 **Goal:** 100 push-ups · 100 core · 100 squats · 10 km. **January milestone
 (honest version):** one full **S-rank day** — 100/100/100 in any number of
 sets + 10 km moved (run + walk) — plus a separate **5 km run-walk test**.
-Daily S and a 10 km run-walk are the Feb–Mar goals. Gym and home both: the
+**The S-rank day unlocks only after every rep target has been ≥ 75 (B band)
+for 2 qualifying weeks** — no single-day jump from ~65 to 100. If that isn't
+reached by January, the milestone moves to February and the push says so,
+without blame. Daily S and a 10 km run-walk are the Feb–Mar goals. Gym and home both: the
 quest needs no equipment; gym days add strength work (§4.2).
 
 **Week 0 (first week after the doctor's OK; ideally after the iron injection
@@ -131,20 +134,29 @@ practice only, no progression yet.
   qualifying week, to 10 km. Running part: run-walk intervals, run minutes
   +10 % a week, at most **one longer day** a week, **no running on
   symptomatic days**.
-- **Deload every 4th week:** targets −30 %, nothing lost.
+- **Deload every 4th calendar week counted from week 0:** targets × 0.7,
+  nothing lost; progression resumes from the pre-deload targets.
+- **A `setting` such as `quest.push = 80`** becomes the new current target and
+  progression continues from it; `quest.push.hold = true` pins it.
 - **Core 100** = any mix of crunches, dead bugs, leg raises, planks (10 s = 1
   rep) — easier on the gut than 100 straight sit-ups.
 
-**Rank = title from today's targets** (anime bands; editable): E < 30 · D 30–49
-· C 50–69 · B 70–84 · A 85–99 · **S 100 + 10 km**.
+**Bands** (anime ranks; editable), from the **lowest** of the three rep
+targets: E < 30 · D 30–49 · C 50–69 · B 70–84 · A 85–99 · **S = 100 on all
+three + 10 km**. **Title = the highest band ever reached** — it never drops
+when a deload or Re-awakening lowers today's targets, and a rank-up is
+announced only the first time a band is reached.
 
 **A qualifying week** = ≥ 4 *real* cleared days (the day's summed quest events
-meet all four targets) **and** mean energy check-in ≥ 3 **and** no pain flag.
+meet all four targets) **and** no day that week with check-in energy ≤ 2 or
+pain ≥ 2. Missing check-ins don't block. (A hold is safe, so there's little
+reason to fudge a score.)
 - **Recovery and rest days protect your streak and XP but never count toward
   progression.** Seven flare days don't level the quest; they just don't hurt.
-- **The title never goes down; today's target can.** After ≥ 4 days without a
-  cleared quest (flare, illness, infusion, travel), the target steps back one
-  band for a week — **"Re-awakening"** — then resumes.
+- **Re-awakening:** after ≥ 4 **consecutive** days without a cleared quest
+  (flare, illness, infusion, travel), targets × 0.7 for 7 days, then resume.
+- **Low-mood shrink** (§6): the push shows one quest item, at Re-awakening
+  targets, until mood lifts.
 
 **Body first:** doctor's OK before week 0. Tell the doctor about the new
 training before blood tests: high-rep work raises CK, and Upadacitinib can
@@ -156,10 +168,17 @@ symptoms).
 → `quest` events; the day's total is their sum. Distance from any phone app,
 typed, or later via Health Connect.
 
-**L1b (small code, ships with its guardrails):** today's targets + title in
-the 08:00 push and in `context()`; weekly progression and deload; rank-up
+**Day 1, before any code:** seed an unpinned rule **`daily quest`** holding
+these rules in words (1.5 × baseline, +10 % min +5, deload, bands, title,
+S-rank unlock, Re-awakening), plus the pinned pointer — so Claude can run the
+quest by hand until L1b.
+
+**L1b (small code, ships with its guardrails, before the first progression
+Monday — Nov 16 if week 0 is Nov 2–8):** today's targets + title in the 08:00
+push and in `context()`; weekly progression, deload, Re-awakening; rank-up
 announcement ("[SYSTEM] Rank up: D → C"); **Recovery Quest on flare, low-mood
-shrink, quiet mode / no pushes after 21:00** — these move here from L3.
+shrink, quiet mode / no pushes after 21:00**. The `daily quest` rule then
+changes to "computed by the System; change it with a `setting`".
 
 ### 4.2 Gym and strength
 
@@ -215,7 +234,7 @@ or a widget.
 
 ## 8. Changes to lifeD itself
 
-- Merge `ccr-7a2881ef-38kr1m` → `main` (step zero).
+- ~~Merge `ccr-7a2881ef-38kr1m` → `main`~~ — done 2026-11-01 (fast-forward, no prod change).
 - Docs out of date with the Paid plan: `DESIGN.md:27`, `STATUS.md:22,114`,
   `wrangler.jsonc:21` comment, AGENTS.md D1/CPU notes (account is on Workers
   Paid per autogram's config) — fix, keep "frugal".
@@ -226,7 +245,7 @@ or a widget.
 
 ## 9. Phases
 
-**Step zero (½ day):** merge the live branch to `main`; confirm migrations
+**Step zero (½ day):** (merge done 2026-11-01) confirm migrations
 `0008` and `0009` are applied to the remote D1 (STATUS says 0008 was pending)
 before seeding new forms; Paid-plan doc fixes.
 
@@ -234,15 +253,15 @@ before seeding new forms; Paid-plan doc fixes.
 phone share tests (link → inbox; screenshot path).
 
 **Quest track (parallel, from week 0 — the January milestone can't wait):**
-`quest`, `checkin` and `setting` forms seeded on day 1 (zero code; Claude reads
-the defaults + your baseline + logs and tells you today's targets). **L1b
+**All** kinds and forms (recipe, exercise, routine; meal, workout, checkin, quest, setting) + the `daily quest` rule + the pinned pointer seeded once, on day 1 (zero code; Claude reads
+the `daily quest` rule + your baseline + logs and tells you today's targets). **L1b
 (~1 day):** targets + title in the 08:00 push and `context()`; weekly
 progression, deload, Re-awakening; rank-up announcement; the guardrails
 (Recovery Quest, low-mood shrink, quiet mode).
 
-**L1 — capture + log (~2 days):** kinds + forms seeded (recipe, exercise,
-routine; meal, workout, checkin, quest); share URL → `inbox` + raw fetch; `urls`
-dedupe; `source` tool; Recipe page with "Cooked it"; one pinned pointer rule.
+**L1 — capture + log (~2 days):** (kinds and forms already seeded on day 1);
+share URL → `inbox` + raw fetch; `urls`
+dedupe; `source` tool; Recipe page with "Cooked it".
 *Done when:* 10 real shares → saved raw, Claude turns ≥ 8 into recipes in one
 chat; meals, workouts and check-ins log by chat.
 
@@ -324,3 +343,17 @@ Still open (all have defaults; change any time by chat):
   as `setting` log events validated on read (core `write` untouched); workout
   refs by exact title; quest form with run/walk split and daily sum; "Side
   quests" renamed; one tunables list; step zero confirms migrations 0008/0009.
+- **Review round 6 → v8 (final gate, accepted):** S-rank day unlocks only
+  after 2 qualifying weeks with every rep target ≥ 75, else the milestone
+  moves to February; band = lowest rep target, title = highest band ever
+  reached, rank-up announced once; `pain` added to `checkin`; qualifying week
+  = ≥ 4 cleared days and no day with energy ≤ 2 or pain ≥ 2 (missing
+  check-ins don't block); Re-awakening after ≥ 4 *consecutive* missed days,
+  targets × 0.7 for 7 days; deload every 4th calendar week from week 0;
+  low-mood shrink = one item at Re-awakening targets; a `daily quest` rule
+  seeded on day 1 so Claude can run the quest by hand until L1b; L1b due
+  before the first progression Monday; `setting` semantics (new current
+  target, `.hold` pins); all kinds and forms seeded once on day 1.
+  Reviewer verdict: ready to hand to a builder.
+- **lifeD `main`** fast-forwarded to the live branch (2026-11-01). This plan
+  now also lives in lifeD as `docs/LEVEL.md`.
