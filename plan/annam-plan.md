@@ -1,8 +1,8 @@
-# Annam — a personal recipe brain on Cloudflare (plan v2)
+# Annam — a personal recipe brain on Cloudflare (plan v3 — final after 3 review rounds)
 
 Working name **Annam** (அன்னம், "food"). Rename freely; it is one string.
 
-Status: **plan only, no code.** v3 = v1 + review rounds 1–2 (see §13).
+Status: **plan only, no code.** v3 = v1 + review rounds 1–3 (see §13). Next step: "Before Day 1" (§10).
 
 ---
 
@@ -31,16 +31,16 @@ an iCal feed. Good ideas to borrow (§9), not a reason to host it.
 ## 2. What it is for
 
 1. **Capture in 5 seconds.** Instagram / YouTube / blog / WhatsApp → Share →
-   Annam. A push says what it understood.
+   Annam. It lands in your library on its own; you are pinged only if it needs you.
 2. **Clear the backlog.** Import the reels and videos you already saved, in
    every Instagram account and YouTube playlist, once. (The "digging through
    saved videos across accounts" problem.)
-3. **"What should I eat today?"** in Claude (Android app, connector): 3–5
+3. **"What should I eat today?"** in Claude (Android app, connector): 3
    options that fit what you have, what you haven't had lately, your gut and
    goals, ₹ and time — each with its source video.
 4. **Adapt.** "Low-residue / more protein / for one / under ₹60" → a saved
    **variant** linked to the original.
-5. **Mix and match.** Recipes are tagged by **role** (base, protein, veg,
+5. **Mix and match.** Recipes are tagged by **role** (main, base, protein, veg,
    gravy, side, topping, breakfast, snack). Claude combines roles from
    `recipes(role:…, have:true)`; no combo engine needed.
 6. **Remember.** "Had the pesarattu, felt fine" → meal log → real variety,
@@ -81,7 +81,7 @@ rules you (and your doctor) own.** A model never stores "safe for Crohn's".
   chutneys) are shown on every match — many "healthy" reels are exactly
   sprouted-moong salads.
 - **Ranking for "tasty"**: tried-and-rated beats untried; untried
-  (`want_to_try`) gets a novelty slot so the backlog actually gets cooked.
+  (`cooked = want`) gets a novelty slot so the backlog actually gets cooked.
 - **Guardrail** (in MCP server instructions): flags, not prescriptions; no
   supplement doses; the doctor overrides everything.
 
@@ -168,7 +168,7 @@ so: Zod-validate → one repair retry → fall back to Gemini `responseSchema`.
   `@modelcontextprotocol/server` **2.4.0** (stable; ships a `validators/cf-worker`
   export) via `createMcpHandler(factory)` from **`agents/mcp/server`**
   (`agents` 0.32.0). The handler does no auth.
-  *P0 hour 1 check:* deploy one tool, connect from Claude Android. If the SDK
+  *Proven in Day-1 spike (3):* one tool, connected from Claude Android. If the SDK
   path misbehaves, port lifeD's `src/mcp.ts` (known-good with every client you use).
 - **Auth:** lifeD's `src/auth/*` in front (OAuth 2.1, CIMD + stateless DCR,
   owner passphrase, one D1 grant row, `ADMIN_TOKEN` bearer for scripts).
@@ -178,10 +178,10 @@ so: Zod-validate → one repair retry → fall back to Gemini `responseSchema`.
 | Tool | What |
 | :-- | :-- |
 | `kitchen` | `{slot?}` → brief ≤ ~500 tokens: phase + active rules, avoids, `have` list, titles eaten last 7 days, "N new since yesterday", items needing you — **plus 3 ranked options** (§4.5), each with a why, the video link and the Annam page link. Call first. |
-| `recipes` | Filtered one-liners: `q, role, cuisine, max_min, have, not_eaten_days, status (tried/want), flags…` |
+| `recipes` | Filtered one-liners: `q, role, cuisine, max_min, have, not_eaten_days, cooked (want|tried), equipment, flags…` |
 | `recipe` | Full recipe(s) by id: ingredients, steps, sources (video links), variants, your log of it. |
 | `kitchen_write` | Many ops, one call, `$i` refs (lifeD style): `recipe.upsert` (variants via `parent`), `meal.log`, `have.set/add/remove`, `profile.set`, `rule.set`, `capture.resolve`. |
-| `fetch_source` | `url` → raw caption/description/transcript + metadata (or "already saved"). If only video can answer, starts Gemini async, returns capture id; push when ready. |
+| `fetch_source` | `url` → raw caption/description/transcript + metadata (or "already saved"). If only video can answer, starts Gemini async, returns capture id; the result shows in the next `kitchen` brief (push only on failure). |
 
 - **Server instructions:** call `kitchen` first; respect phase rules and
   avoids; show 3 options with a why; link the source video **and** the Annam
@@ -193,13 +193,16 @@ so: Zod-validate → one repair retry → fall back to Gemini `responseSchema`.
 
 ### 4.5 `kitchen` ranking (v1 formula — tune on a week of real logs)
 
-**Slot → roles:** breakfast → `breakfast`; lunch/dinner → `main` or
-`base + gravy/protein + veg`; snack → `snack`.
+`kitchen` ranks **single recipes**. Combining a rice base with a gravy and a
+poriyal is Claude's job, using `recipes(role:…, have:true)`.
+
+**Slot → roles:** breakfast → `breakfast`; lunch/dinner → `main | gravy |
+protein`; snack → `snack`.
 
 **Filter:** `status = ready` · slot roles · hard avoids · current phase rules ·
-equipment you have · `total_min ≤ max` if asked.
+recipe `equipment[]` ⊆ profile equipment · `total_min ≤ max` if asked.
 
-**Score** (each term 0–1):
+**Score** (cov, gap, nut are 0–1; taste is −1…1):
 
 ```
 score = 3.0 · cov      # non-staple, non-optional ingredients found in `have`
@@ -213,8 +216,10 @@ score = 3.0 · cov      # non-staple, non-optional ingredients found in `have`
 ```
 
 **Pick:** top 2 *tried* recipes (never the same `main_protein`) + 1 slot for
-the best *want-to-try*. Ties broken by a date-seeded shuffle, so asking twice
-in a day gives the same answer. `have: true` in `recipes` = cov ≥ 0.7.
+the best *want-to-try*. Slots with no tried recipe yet (the first weeks) are
+filled from *want*. Ties broken by a date-seeded shuffle, so asking twice in a
+day gives the same answer. `have: true` in `recipes` = cov ≥ 0.7. Per-meal
+budget defaults to **₹55** (₹5,000 / 90 meals) until §12 Q4 is answered.
 
 **Why line:** the two biggest score terms in words + up to 3 missing items.
 ("In stock, not had in 9 days · missing: curry leaves")
@@ -225,18 +230,26 @@ in a day gives the same answer. `have: true` in `recipes` = cov ≥ 0.7.
   canonical, text, files (R2), status (`queued|working|ready|needs_input|failed`),
   reason, attempts, recipe_id.
 - `recipes` — id, slug, title, title_ta, summary, cuisine, roles[], servings,
-  total_min, status (`draft|ready|archived`), cooked (`want|tried`), rating,
+  total_min, status (`ready|archived`), cooked (`want|tried`), rating,
   auto_imported, parent_id + variant_note, notes, steps (json; optional timer
   per step), main_protein, protein_g≈, inr_per_serving≈, flags (json,
-  derived), nutrient_sources[], method[], created/updated.
+  derived), nutrient_sources[], method[], equipment[] (extractor picks from a
+  fixed list: pressure cooker, mixie, tawa, kadai, steamer, oven, air fryer,
+  microwave), created/updated.
 - `ingredients` — recipe_id, pos, section, raw, name (canonical English),
   qty, unit, main (bool), optional.
 - `sources` — recipe_id, platform, canonical_url (**unique**), url, author,
   title, caption, transcript, lang, thumb_r2, fetched_at. Many per recipe.
 - `meals` — at, slot, recipe_id?, text, main_protein, cuisine, portion,
   rating, felt, note. (Text-only meals like "had biryani" still feed variety.)
-  **Annam owns meals** (variety needs `recipe_id`); symptoms/meds stay in lifeD.
-  Update the Food & Health assistant's rule to log meals here. Logging starts in P0.
+  **Annam owns meals** (variety needs `recipe_id`). Logging starts in P0;
+  meals already logged in lifeD are not imported (variety builds from day 1).
+
+**Who owns what:** lifeD owns health facts (conditions, meds, symptoms, labs).
+Annam owns food: recipes, meals, `have`, and the food rules. The profile is
+seeded **once** from lifeD #357; after that each side edits only its own part.
+Updating the Food & Health assistant's rule ("log meals to Annam") is a P0
+done item.
 - `profile` — one JSON row: phase, rules per phase, avoids, triggers,
   deficiencies, targets, `have[]` (names only) + `have_updated_at`, staples,
   equipment, budget (per meal), cuisine, spice, diet.
@@ -280,29 +293,44 @@ spinners. "Today", "Mix", pantry and planning are Claude's job in v1.
 ## 8. Cost
 
 Workers Paid $5/mo covers Workers, D1, R2, Workflows. Gemma ≈ cents/month.
-Browser Run: ~100 renders/month ≈ 17 min; a 500-reel backlog ≈ 1.5 h — inside
-the 10 h included. Gemini (video fallback only) < $1/month. **≈ $5–6/month.**
+Browser Run: ~100 renders/month ≈ 17 min, inside the 10 h included on Paid (the
+Instagram backlog runs on your home connection, not Browser Run). Gemini (video fallback only) < $1/month. **≈ $5–6/month.**
 
 ## 9. Reuse map
 
 | From | Take |
 | :-- | :-- |
-| lifeD | `auth/*`, `owner.ts` (cookie, extend to 1 y), `write` ops with `$i`, `instructions` builder, ntfy (`remind.ts`), R2 backup (`archive.ts`), `telegram.ts`, manifest + share route, page layout, tooling |
+| lifeD | `auth/*`, `owner.ts` (cookie, extend to 1 y), `write` ops with `$i`, `instructions` builder, ntfy (`remind.ts`), R2 backup (`archive.ts`), `telegram.ts` (text only; file handling is new work), manifest + share route, page layout, tooling |
 | autogram | Gemma call + neuron accounting (`ai-writer.ts`), Gemini upload/poll + `responseSchema` (`video-analysis.ts`), spend cap (`ai-budget.ts`), Drizzle/migration discipline, MCP arg validation (`mcp-args.ts`), mutation-proven tests |
 | Mealie | schema.org Recipe fields; prompts `parse-recipe-video`, `parse-recipe-ingredients`, `build-recipe` as starting text; qty/unit/name split; step timers (v3.30); editable AI prompts (store prompts in `settings`) |
 
 ## 10. Phases and "done" checks
 
-**Day 1 — spikes (half a day).** (1) 20 reels through Browser Run from a
-deployed Worker. (2) On your phone: PWA install, GET share, SW-POST screenshot
-share vs Telegram. (3) One-tool MCP via SDK v2 connected from Claude Android.
+**Before Day 1 — inputs (you, ~30 min).**
+- 20 reel URLs whose caption, as seen in the Instagram app, contains the recipe.
+- The permanent hostname (custom domain or `annam.<you>.workers.dev`). OAuth
+  issuer and PWA scope are tied to it; changing it later breaks the connector.
+- A YouTube Data API key (needed in P0 by `fetch_source`).
+- An ntfy topic (reuse lifeD's app on the phone, new topic).
+- If file option (b) is tested: a Telegram bot token. For P1b: a Gemini key.
+- Answers to §12, at least Q1, Q2, Q4.
+
+**Day 1 — spikes (half a day).**
+1. The 20 reels through the **Browser Run Workers binding** from the deployed
+   Worker. *Pass:* ≥ 14 of 20 return the caption with the full ingredient list
+   (not truncated). Pass → Instagram Plan A; fail → screenshot path is primary.
+2. On your phone: PWA install, GET share, SW-POST screenshot share vs Telegram.
+   *Pass:* the share lands with the cookie, without a login prompt, 5 of 5 times.
+3. One-tool MCP via SDK v2 connected from Claude Android. *Pass:* tool call
+   works from the phone; else port lifeD's `mcp.ts`.
 *Output:* the Instagram plan, the file-share plan and the MCP path, written into §4.2/§6.
 
 **P0 — talkable (1–2 days).** D1 schema; auth; 5 MCP tools; profile + rules;
 meal logging. Recipes enter by Claude (`fetch_source` for blogs/YouTube
 descriptions, paste for the rest).
 *Done when:* on the phone, "save this: <YouTube link>", "had dosa for
-dinner", and "what can I make with eggs and rice?" all work.
+dinner", and "what can I make with eggs and rice?" all work, and the Food &
+Health assistant's rule now sends meals to Annam.
 
 **P1a — share sheet (2–3 days).** PWA + GET share; captures + Inbox; ingest
 Workflow: blog JSON-LD, YouTube description, Instagram per the spike; Gemma
@@ -340,7 +368,7 @@ meal correlation job with lifeD; Containers + yt-dlp; TWA/native widget.
 | Instagram blocks Browser Run | Day-1 spike decides; screenshot path is first-class; never lose the share |
 | Backlog script trips Instagram | Logged-out, one reel per ~20 s, one-time run, resumable; never with your main account's session |
 | Share POST hits the login wall | GET for links; SW-POST or Telegram for files; 1-year cookie |
-| Model invents quantities | "Null if unknown"; raw caption/transcript kept beside the recipe; Zod + repair; drafts go to Inbox |
+| Model invents quantities | "Null if unknown"; raw caption/transcript kept beside the recipe; Zod + repair; results under the auto-ready bar go to the Inbox as `needs_input` |
 | Health overreach | Facts stored, rules decide; flags not advice; doctor overrides |
 | Two connectors confuse the model | Distinct tool names; short descriptions |
 | Copyright | Private app; stores link, caption, transcript, private thumbnail; never republishes |
@@ -383,3 +411,12 @@ nutrient flags; P0 check uses a YouTube link; auto-ready + Inbox for problems
 only + push only on failure; screenshot joins its link's capture; stale-`have`
 and phase-drift questions; Annam page link on every option; Wake Lock and
 1-tap stars after "Cooked it".
+
+**Round 3 (final gate, accepted):** stale text fixed (push rules, `draft`
+status removed, `main` role, 3 options, `cooked` naming, single MCP check,
+cost line, `telegram.ts` scope, taste range); `kitchen` ranks single recipes
+and Claude composes combos; `equipment[]` from a fixed list; empty tried
+slots fill from want; ₹55 default per meal; Annam/lifeD ownership written
+down; "Before Day 1" inputs and pass criteria for each spike. Reviewer's
+verdict: no substantive factual claim found wrong; ready for Day 1 with these
+edits.
