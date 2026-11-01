@@ -14,13 +14,16 @@ export type RelationalOperator = "=" | "<>" | ">" | "<" | ">=" | "<=";
 
 export interface CreatePlanEntry {
   date: string;
+  endDate?: string | null;
   entryType?: PlanEntryType;
   title?: string;
   text?: string;
   recipeId?: string | null;
+  recipeScale?: number;
 }
 export interface CreateRandomEntry {
   date: string;
+  endDate?: string | null;
   entryType?: PlanEntryType;
 }
 export interface ListItem {
@@ -62,12 +65,18 @@ export interface PlanRulesSave {
   groupId: string;
   householdId: string;
 }
+export interface ReadMealPlanICalToken {
+  householdId: string;
+  mealplanIcalToken?: string | null;
+}
 export interface ReadPlanEntry {
   date: string;
+  endDate?: string | null;
   entryType?: PlanEntryType;
   title?: string;
   text?: string;
   recipeId?: string | null;
+  recipeScale?: number;
   id: number;
   groupId: string;
   userId: string;
@@ -102,7 +111,6 @@ export interface RecipeSummary {
   dateUpdated?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
-  lastMade?: string | null;
 }
 export interface RecipeCategory {
   id?: string | null;
@@ -128,10 +136,12 @@ export interface RecipeTool {
 }
 export interface SavePlanEntry {
   date: string;
+  endDate?: string | null;
   entryType?: PlanEntryType;
   title?: string;
   text?: string;
   recipeId?: string | null;
+  recipeScale?: number;
   groupId: string;
   userId: string;
 }
@@ -148,10 +158,12 @@ export interface ShoppingListOut {
 }
 export interface UpdatePlanEntry {
   date: string;
+  endDate?: string | null;
   entryType?: PlanEntryType;
   title?: string;
   text?: string;
   recipeId?: string | null;
+  recipeScale?: number;
   id: number;
   groupId: string;
   userId: string;

@@ -1,7 +1,8 @@
 import random
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
+import pytest
 from dateutil.tz import tzlocal
 from fastapi.testclient import TestClient
 
@@ -128,6 +129,87 @@ def test_create_mealplan_with_recipe(api_client: TestClient, unique_user: TestUs
     assert response_json["recipe"]["slug"] == recipe_name
 
 
+def create_mealplan_with_recipe(api_client: TestClient, unique_user: TestUser, **entry_fields) -> dict:
+    recipe = create_recipe(unique_user)
+    payload = {
+        "date": datetime.now(UTC).date().strftime("%Y-%m-%d"),
+        "entryType": "dinner",
+        "recipeId": str(recipe.id),
+        **entry_fields,
+    }
+
+    response = api_client.post(api_routes.households_mealplans, json=payload, headers=unique_user.token)
+    assert response.status_code == 201
+    return response.json()
+
+
+def test_create_mealplan_recipe_scale_defaults_to_one(api_client: TestClient, unique_user: TestUser):
+    plan = create_mealplan_with_recipe(api_client, unique_user)
+    assert plan["recipeScale"] == 1
+
+    # the default is what's stored, not just what the create response reports
+    response = api_client.get(api_routes.households_mealplans_item_id(plan["id"]), headers=unique_user.token)
+    assert response.status_code == 200
+    assert response.json()["recipeScale"] == 1
+
+    stored = unique_user.repos.meals.get_one(plan["id"])
+    assert stored is not None
+    assert stored.recipe_scale == 1
+
+
+def test_create_mealplan_with_recipe_scale(api_client: TestClient, unique_user: TestUser):
+    plan = create_mealplan_with_recipe(api_client, unique_user, recipeScale=2.5)
+    assert plan["recipeScale"] == 2.5
+
+    response = api_client.get(api_routes.households_mealplans_item_id(plan["id"]), headers=unique_user.token)
+    assert response.status_code == 200
+    assert response.json()["recipeScale"] == 2.5
+
+
+def test_update_mealplan_recipe_scale(api_client: TestClient, unique_user: TestUser):
+    plan = create_mealplan_with_recipe(api_client, unique_user, recipeScale=2)
+
+    plan["recipeScale"] = 0.5
+    response = api_client.put(api_routes.households_mealplans_item_id(plan["id"]), json=plan, headers=unique_user.token)
+    assert response.status_code == 200
+    assert response.json()["recipeScale"] == 0.5
+
+    response = api_client.get(api_routes.households_mealplans_item_id(plan["id"]), headers=unique_user.token)
+    assert response.json()["recipeScale"] == 0.5
+
+    # the scale belongs to the entry, so it's included when listing a date range
+    today = plan["date"]
+    response = api_client.get(route_all_slice(1, -1, today, today), headers=unique_user.token)
+    assert response.status_code == 200
+    listed = next(item for item in response.json()["items"] if item["id"] == plan["id"])
+    assert listed["recipeScale"] == 0.5
+
+
+@pytest.mark.parametrize("recipe_scale", [0, -1])
+def test_mealplan_recipe_scale_must_be_positive(api_client: TestClient, unique_user: TestUser, recipe_scale: float):
+    recipe = create_recipe(unique_user)
+    payload = {
+        "date": datetime.now(UTC).date().strftime("%Y-%m-%d"),
+        "entryType": "dinner",
+        "recipeId": str(recipe.id),
+        "recipeScale": recipe_scale,
+    }
+
+    response = api_client.post(api_routes.households_mealplans, json=payload, headers=unique_user.token)
+    assert response.status_code == 422
+
+    plan = create_mealplan_with_recipe(api_client, unique_user, recipeScale=2)
+    response = api_client.put(
+        api_routes.households_mealplans_item_id(plan["id"]),
+        json={**plan, "recipeScale": recipe_scale},
+        headers=unique_user.token,
+    )
+    assert response.status_code == 422
+
+    response = api_client.get(api_routes.households_mealplans_item_id(plan["id"]), headers=unique_user.token)
+    assert response.json()["recipeScale"] == 2
+
+
 def test_crud_mealplan(api_client: TestClient, unique_user: TestUser):
     new_plan = CreatePlanEntry(
         date=datetime.now(UTC).date(),
@@ -244,6 +326,70 @@ def test_get_mealplan_today(api_client: TestClient, unique_user: TestUser):
         assert meal_plan["date"] == datetime.now(tzlocal()).date().strftime("%Y-%m-%d")
 
 
+def create_entry(api_client: TestClient, unique_user: TestUser, **kwargs) -> dict:
+    data = CreatePlanEntry(entry_type="dinner", title=random_string(), **kwargs).model_dump(by_alias=True, mode="json")
+    response = api_client.post(api_routes.households_mealplans, json=data, headers=unique_user.token)
+    assert response.status_code == 201
+    return response.json()
+
+
+@pytest.mark.parametrize(
+    "end_date_offset, status_code", [(None, 201), (6, 201), (0, 422), (5, 422), (7, 422), (-6, 422)]
+)
+def test_create_mealplan_end_date_must_be_a_week(
+    api_client: TestClient, unique_user: TestUser, end_date_offset: int | None, status_code: int
+):
+    start = datetime.now(UTC).date()
+    end = start + timedelta(days=end_date_offset) if end_date_offset is not None else None
+    payload = {
+        "date": str(start),
+        "endDate": str(end) if end else None,
+        "entryType": "dinner",
+        "title": random_string(),
+    }
+
+    response = api_client.post(api_routes.households_mealplans, json=payload, headers=unique_user.token)
+    assert response.status_code == status_code
+
+
+def test_get_slice_mealplans_week_entries(api_client: TestClient, unique_user: TestUser):
+    day = datetime.now(UTC).date() + timedelta(days=365)
+    day_entry = create_entry(api_client, unique_user, date=day)
+    week_start = day - timedelta(days=3)
+    week_entry = create_entry(api_client, unique_user, date=week_start, end_date=week_start + timedelta(days=6))
+
+    def get_ids(start: date, end: date, include_week_entries: bool) -> list[int]:
+        params = {"page": 1, "perPage": -1, "start_date": str(start), "end_date": str(end)}
+        if include_week_entries:
+            params["include_week_entries"] = "true"
+        response = api_client.get(api_routes.households_mealplans, params=params, headers=unique_user.token)
+        assert response.status_code == 200
+        return [item["id"] for item in response.json()["items"]]
+
+    # week entries are opt-in, so existing clients only see entries on a specific day
+    ids = get_ids(day, day, include_week_entries=False)
+    assert day_entry["id"] in ids
+    assert week_entry["id"] not in ids
+
+    # a week entry is returned for any range it overlaps, even one starting after the week does
+    ids = get_ids(day, day, include_week_entries=True)
+    assert day_entry["id"] in ids
+    assert week_entry["id"] in ids
+
+    # ranges entirely after or before the week don't return it
+    assert week_entry["id"] not in get_ids(day + timedelta(days=4), day + timedelta(days=10), True)
+    assert week_entry["id"] not in get_ids(day - timedelta(days=10), day - timedelta(days=4), True)
+
+
+def test_get_mealplan_today_skips_week_entries(api_client: TestClient, unique_user: TestUser):
+    today = datetime.now(tzlocal()).date()
+    week_entry = create_entry(api_client, unique_user, date=today, end_date=today + timedelta(days=6))
+
+    response = api_client.get(api_routes.households_mealplans_today, headers=unique_user.token)
+    assert response.status_code == 200
+    assert week_entry["id"] not in [item["id"] for item in response.json()]
+
+
 def test_get_mealplan_with_rules_categories_and_tags_filter(api_client: TestClient, unique_user: TestUser):
     tags = [
         unique_user.repos.tags.create(TagSave(name=random_string(), group_id=unique_user.group_id)) for _ in range(4)
@@ -355,6 +501,50 @@ def test_get_mealplan_with_rules_date_and_type_filter(api_client: TestClient, un
         response = api_client.post(api_routes.households_mealplans_random, json=payload, headers=unique_user.token)
         assert response.status_code == 200
         assert response.json()["recipe"]["slug"] == recipes[0].slug
+    finally:
+        for rule in rules:
+            unique_user.repos.group_meal_plan_rules.delete(rule.id)
+
+
+def test_get_rules_for_unset_day_skips_weekday_specific_rules(unique_user: TestUser):
+    any_day_rule = create_rule(unique_user, day=PlanRulesDay.unset, entry_type=PlanRulesType.unset)
+    saturday_rule = create_rule(unique_user, day=PlanRulesDay.saturday, entry_type=PlanRulesType.unset)
+
+    try:
+        rules = unique_user.repos.group_meal_plan_rules.get_rules(PlanRulesDay.unset, PlanRulesType.breakfast)
+        assert {rule.id for rule in rules} == {any_day_rule.id}
+
+        rules = unique_user.repos.group_meal_plan_rules.get_rules(PlanRulesDay.saturday, PlanRulesType.breakfast)
+        assert {rule.id for rule in rules} == {any_day_rule.id, saturday_rule.id}
+    finally:
+        unique_user.repos.group_meal_plan_rules.delete(any_day_rule.id)
+        unique_user.repos.group_meal_plan_rules.delete(saturday_rule.id)
+
+
+def test_get_mealplan_with_rules_week_entry_skips_weekday_specific_rules(api_client: TestClient, unique_user: TestUser):
+    any_day_tag, saturday_tag = [
+        unique_user.repos.tags.create(TagSave(name=random_string(), group_id=unique_user.group_id)) for _ in range(2)
+    ]
+    recipe = create_recipe(unique_user, tags=[any_day_tag])
+    [create_recipe(unique_user) for _ in range(5)]
+
+    rules = [
+        create_rule(unique_user, day=PlanRulesDay.unset, entry_type=PlanRulesType.breakfast, tags=[any_day_tag]),
+        create_rule(unique_user, day=PlanRulesDay.saturday, entry_type=PlanRulesType.breakfast, tags=[saturday_tag]),
+    ]
+
+    try:
+        # a day entry on a Saturday gets both rules, which no recipe satisfies
+        payload = {"date": "2023-02-25", "entryType": "breakfast"}
+        response = api_client.post(api_routes.households_mealplans_random, json=payload, headers=unique_user.token)
+        assert response.status_code == 404
+
+        # a week entry starting on that Saturday isn't on a specific weekday, so the Saturday rule is skipped
+        payload = {"date": "2023-02-25", "endDate": "2023-03-03", "entryType": "breakfast"}
+        response = api_client.post(api_routes.households_mealplans_random, json=payload, headers=unique_user.token)
+        assert response.status_code == 200
+        assert response.json()["recipe"]["slug"] == recipe.slug
+        assert response.json()["endDate"] == "2023-03-03"
     finally:
         for rule in rules:
             unique_user.repos.group_meal_plan_rules.delete(rule.id)

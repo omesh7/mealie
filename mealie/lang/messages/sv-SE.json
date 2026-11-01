@@ -5,6 +5,13 @@
     "recipe": {
         "unique-name-error": "Receptnamn måste vara unika",
         "recipe-created": "Recept skapat",
+        "made-this-as-side": "{name} made this as a side",
+        "made-this-for-breakfast": "{name} made this for breakfast",
+        "made-this-for-lunch": "{name} made this for lunch",
+        "made-this-for-dinner": "{name} made this for dinner",
+        "made-this-for-snack": "{name} made this for a snack",
+        "made-this-for-drink": "{name} made this for a drink",
+        "made-this-for-dessert": "{name} made this for dessert",
         "recipe-image-deleted": "Receptbild borttagen",
         "recipe-defaults": {
             "ingredient-note": "1 kopp mjöl",
@@ -24,6 +31,7 @@
             "ai-not-enabled": "AI-tjänster är inte aktiverade",
             "ai-request-failed": "AI-leverantören kunde inte slutföra begäran. Vänligen försök igen",
             "image-provider-not-enabled": "AI-bildtjänster är inte aktiverat",
+            "invalid-mealie-export": "This looks like a recipe exported from Mealie, but it could not be imported",
             "no-recipe-found": "Inget recept hittades i den angivna källan",
             "no-source": "Inget innehåll, bilder eller URL tillhandahölls",
             "provider-returned-nothing": "AI-leverantören returnerade inte ett recept",
@@ -116,7 +124,10 @@
         "test-message-body": "This is a test notification from Mealie.",
         "mealplan-entry-created": "Meal plan entry created for {date} for {entry_type}",
         "mealplan-entry-updated": "Meal plan entry updated for {date} for {entry_type}",
-        "mealplan-entry-deleted": "Meal plan entry deleted for {date} for {entry_type}"
+        "mealplan-entry-deleted": "Meal plan entry deleted for {date} for {entry_type}",
+        "mealplan-range-entry-created": "Meal plan entry created for {date} to {end_date} for {entry_type}",
+        "mealplan-range-entry-updated": "Meal plan entry updated for {date} to {end_date} for {entry_type}",
+        "mealplan-range-entry-deleted": "Meal plan entry deleted for {date} to {end_date} for {entry_type}"
     },
     "datetime": {
         "year": "år|år",

@@ -359,6 +359,45 @@ def test_timeline_event_update_image(
     assert updated_event.image == TimelineEventImage.has_image.value
 
 
+def test_timeline_event_remove_image(
+    api_client: TestClient,
+    unique_user: TestUser,
+    recipes: list[Recipe],
+    test_image_jpg: str,
+):
+    new_event_data = {
+        "recipe_id": str(recipes[0].id),
+        "user_id": str(unique_user.user_id),
+        "subject": random_string(),
+        "event_type": "info",
+    }
+    event_response = api_client.post(api_routes.recipes_timeline_events, json=new_event_data, headers=unique_user.token)
+    new_event = RecipeTimelineEventOut.model_validate(event_response.json())
+
+    with open(test_image_jpg, "rb") as f:
+        r = api_client.put(
+            api_routes.recipes_timeline_events_item_id_image(new_event.id),
+            files={"image": ("test_image_jpg.jpg", f, "image/jpeg")},
+            data={"extension": "jpg"},
+            headers=unique_user.token,
+        )
+    r.raise_for_status()
+
+    image_files = list(new_event.image_dir.glob("*.webp"))
+    assert image_files
+
+    event_response = api_client.put(
+        api_routes.recipes_timeline_events_item_id(new_event.id),
+        json={"subject": new_event.subject, "image": TimelineEventImage.does_not_have_image.value},
+        headers=unique_user.token,
+    )
+    assert event_response.status_code == 200
+
+    updated_event = RecipeTimelineEventOut.model_validate(event_response.json())
+    assert updated_event.image == TimelineEventImage.does_not_have_image.value
+    assert not any(image_file.exists() for image_file in image_files)
+
+
 @pytest.mark.parametrize("use_other_household_user", [True, False])
 def test_create_recipe_with_timeline_event(
     api_client: TestClient,
@@ -392,6 +431,10 @@ def test_recipe_created_system_event_is_translated(
     recipe = recipes[0]
     params = {"queryFilter": f"recipe_id={recipe.id}"}
 
+    # read the French string from the locale file, since Crowdin owns its exact wording
+    expected_fr = get_all_translations(RECIPE_CREATED_EVENT_SUBJECT)["fr-FR"]
+    assert expected_fr != "Recipe Created"
+
     # fetch events in French — the system "recipe created" event should be translated
     fr_headers = {**unique_user.token, "Accept-Language": "fr-FR"}
     events_response = api_client.get(api_routes.recipes_timeline_events, params=params, headers=fr_headers)
@@ -402,13 +445,13 @@ def test_recipe_created_system_event_is_translated(
     assert system_events, "expected at least one system event for a newly created recipe"
 
     for event in system_events:
-        assert event.subject == "Recette créée", f"expected French translation, got: {event.subject!r}"
+        assert event.subject == expected_fr, f"expected French translation, got: {event.subject!r}"
 
         # also verify the individual GET endpoint translates correctly
         single_response = api_client.get(api_routes.recipes_timeline_events_item_id(event.id), headers=fr_headers)
         assert single_response.status_code == 200
         single_event = RecipeTimelineEventOut.model_validate(single_response.json())
-        assert single_event.subject == "Recette créée"
+        assert single_event.subject == expected_fr
 
     # fetch the same events in English — subject should be the English string
     en_headers = {**unique_user.token, "Accept-Language": "en-US"}
