@@ -72,8 +72,9 @@ rules you (and your doctor) own.** A model never stores "safe for Crohn's".
 - **Rules** live in the profile and are edited by chat:
   `phase: remission | flare | recovering`; per-phase filters (e.g. flare:
   `chilli ≤ 1, no fried, insoluble_fibre = lo, no seeds_skins, no raw_veg`);
-  hard avoids; learned triggers ("rajma → bloating"). Low-residue applies in
-  flares (and strictures), **not** by default in remission — your call (§12).
+  hard avoids; learned triggers ("rajma → bloating"). **Decided:** diet is
+  everything (veg, egg, non-veg); low-residue applies **only in flares**, not
+  in remission.
 - **Upadacitinib defaults** (flagged, never forbidden; confirm with your
   doctor): **grapefruit / grapefruit juice** = hard avoid (patient leaflets;
   CYP3A4). JAK inhibitors raise infection risk, so **food-safety flags**
@@ -82,6 +83,10 @@ rules you (and your doctor) own.** A model never stores "safe for Crohn's".
   sprouted-moong salads.
 - **Ranking for "tasty"**: tried-and-rated beats untried; untried
   (`cooked = want`) gets a novelty slot so the backlog actually gets cooked.
+- **Treat days are allowed.** "Something really good tonight" → `kitchen
+  {treat: true}`: taste dominates, budget and nutrient terms are switched off,
+  fried/rich is fine. Only hard avoids, food-safety flags and *flare* rules
+  still apply. The app is not a diet police.
 - **Guardrail** (in MCP server instructions): flags, not prescriptions; no
   supplement doses; the doctor overrides everything.
 
@@ -177,7 +182,7 @@ so: Zod-validate → one repair retry → fall back to Gemini `responseSchema`.
 
 | Tool | What |
 | :-- | :-- |
-| `kitchen` | `{slot?}` → brief ≤ ~500 tokens: phase + active rules, avoids, `have` list, titles eaten last 7 days, "N new since yesterday", items needing you — **plus 3 ranked options** (§4.5), each with a why, the video link and the Annam page link. Call first. |
+| `kitchen` | `{slot?, treat?}` → brief ≤ ~500 tokens: phase + active rules, avoids, `have` list, titles eaten last 7 days, "N new since yesterday", items needing you — **plus 3 ranked options** (§4.5), each with a why, the video link and the Annam page link. Call first. |
 | `recipes` | Filtered one-liners: `q, role, cuisine, max_min, have, not_eaten_days, cooked (want|tried), equipment, flags…` |
 | `recipe` | Full recipe(s) by id: ingredients, steps, sources (video links), variants, your log of it. |
 | `kitchen_write` | Many ops, one call, `$i` refs (lifeD style): `recipe.upsert` (variants via `parent`), `meal.log`, `have.set/add/remove`, `profile.set`, `rule.set`, `capture.resolve`. |
@@ -215,11 +220,15 @@ score = 3.0 · cov      # non-staple, non-optional ingredients found in `have`
       − 1.0 if ₹/serving > 1.5 × per-meal budget
 ```
 
+**Treat mode** (`treat: true`): `score = 3·taste + 1·gap + 1·cov`; no budget,
+nutrient or fried penalties; `want` recipes tagged rich/indulgent get the
+novelty slot. Hard avoids, food safety and flare rules still filter.
+
 **Pick:** top 2 *tried* recipes (never the same `main_protein`) + 1 slot for
 the best *want-to-try*. Slots with no tried recipe yet (the first weeks) are
 filled from *want*. Ties broken by a date-seeded shuffle, so asking twice in a
 day gives the same answer. `have: true` in `recipes` = cov ≥ 0.7. Per-meal
-budget defaults to **₹55** (₹5,000 / 90 meals) until §12 Q4 is answered.
+budget defaults to **₹55** (₹5,000 / 90 meals) until §12 Q3 is answered.
 
 **Why line:** the two biggest score terms in words + up to 3 missing items.
 ("In stock, not had in 9 days · missing: curry leaves")
@@ -231,13 +240,19 @@ budget defaults to **₹55** (₹5,000 / 90 meals) until §12 Q4 is answered.
   reason, attempts, recipe_id.
 - `recipes` — id, slug, title, title_ta, summary, cuisine, roles[], servings,
   total_min, status (`ready|archived`), cooked (`want|tried`), rating,
-  auto_imported, parent_id + variant_note, notes, steps (json; optional timer
-  per step), main_protein, protein_g≈, inr_per_serving≈, flags (json,
+  auto_imported, parent_id + variant_note, notes, steps (json; each step may
+  carry a timer in **minutes or pressure-cooker whistles**), main_protein, protein_g≈, inr_per_serving≈, flags (json,
   derived), nutrient_sources[], method[], equipment[] (extractor picks from a
   fixed list: pressure cooker, mixie, tawa, kadai, steamer, oven, air fryer,
   microwave), created/updated.
 - `ingredients` — recipe_id, pos, section, raw, name (canonical English),
-  qty, unit, main (bool), optional.
+  qty, unit (as the source said it: g, ml, tsp, cup, **tumbler**, ladle,
+  handful, pinch, "to taste"), grams≈ (for scale mode), ratio_group (e.g. rice
+  1 : water 2), main (bool), optional. Nothing is invented: "to taste" stays
+  "to taste".
+- **Servings default to 1** (you cook for yourself). Scaling multiplies
+  ingredients but leaves whistles, tempering spices and "to taste" alone, and
+  rounds to things you can measure (½ tsp, not 0.37 tsp).
 - `sources` — recipe_id, platform, canonical_url (**unique**), url, author,
   title, caption, transcript, lang, thumb_r2, fetched_at. Many per recipe.
 - `meals` — at, slot, recipe_id?, text, main_protein, cuisine, portion,
@@ -281,8 +296,13 @@ meal plan, shopping list, kcal/macros, IFCT.
 
 1. **Share** — the landing page for shares; shows status.
 2. **Inbox** — only what needs you: `needs_input` / `failed` (add screenshot / paste).
-3. **Recipe** — thumbnail + "open video", ingredients (✓ in `have`), steps with
-   timers, flags/badges, variants. Screen stays awake while open (Wake Lock).
+3. **Recipe** — thumbnail + "open video", ingredients (✓ in `have`), steps,
+   flags/badges, variants. **Cooking mode:** screen stays awake (Wake Lock);
+   big, good-looking timers you can run several of at once (minutes, or a
+   whistle counter for the cooker), with a sound + vibration at the end;
+   servings stepper (default 1); a measure toggle — **Scale** (grams/ml),
+   **Tumbler** (your tumbler, sized once in Settings), or **Ratio** (rice 1 :
+   water 2, eyeball the rest).
    **"Cooked it"** logs a meal (slot from time of day), sets `tried`, and shows
    1-tap stars right there — ratings are what "tasty" ranks on.
 4. **Library** — search + filters (role, time, tried/want, flare-friendly now).
@@ -313,7 +333,7 @@ Instagram backlog runs on your home connection, not Browser Run). Gemini (video 
 - A YouTube Data API key (needed in P0 by `fetch_source`).
 - An ntfy topic (reuse lifeD's app on the phone, new topic).
 - If file option (b) is tested: a Telegram bot token. For P1b: a Gemini key.
-- Answers to §12, at least Q1, Q2, Q4.
+- Answers to the open §12 questions (Q1–Q3).
 
 **Day 1 — spikes (half a day).**
 1. The 20 reels through the **Browser Run Workers binding** from the deployed
@@ -348,9 +368,11 @@ vision, Gemini video path.
   blocked far less than Cloudflare's): logged-out, slow (~1 reel / 20 s),
   posting caption + thumbnail URL to `/api/backlog` with `ADMIN_TOKEN`.
   Independent of the day-1 result; no Containers needed.
-- *YouTube:* make the recipe playlists unlisted for a day and read them with an
-  API key (`playlistItems.list`), no Google login. Watch Later is invisible to
-  the Data API since 2016 → Takeout CSV (verify).
+- *YouTube:* nothing account-specific. New videos: you share the URL and the
+  app reads it (API key, no login). Old saves, only if you want them: share
+  a **playlist URL** and the app imports every video in it (public/unlisted,
+  `playlistItems.list`). Watch Later can't be read by URL; move the ones you
+  care about into a playlist first.
 - All items → the same `ingest` Workflow via `createBatch`, paced; land as
   `want`. Ranking in `kitchen` tuned on a week of real logs.
 *Done when:* every saved reel across accounts is searchable in one place, and
@@ -375,13 +397,18 @@ meal correlation job with lifeD; Containers + yt-dlp; TWA/native widget.
 
 ## 12. Questions only you can answer
 
-1. Veg / egg / non-veg? Foods your doctor told you to avoid?
-2. **Low-residue always, or only in flares?** (Confirm with your doctor; also
-   the grapefruit and food-safety defaults.)
-3. Kitchen: burners, pressure cooker, mixie, air fryer/oven, fridge? Who cooks?
-4. Protein target? Weight goal? Is ₹5k/month all food or groceries only?
-5. How many Instagram accounts / YouTube accounts hold saved recipes?
-6. Tamil dish names alongside English? Name "Annam" OK?
+Answered (2026-11-01): diet = veg + egg + non-veg; low-residue only in
+flares; up to 2 Instagram accounts; YouTube = share URLs (no account work);
+mostly cooking for one; treat meals wanted sometimes; measurements both
+precise (scale) and by eye (tumbler, ratios); timers wanted.
+
+Still open:
+1. Foods your doctor told you to avoid? (And a quick yes on the grapefruit and
+   food-safety defaults.)
+2. Kitchen: burners, pressure cooker, mixie, air fryer/oven, fridge, weighing
+   scale? How big is your tumbler (ml)? — or the app asks once.
+3. Protein target? Weight goal? Is ₹5k/month all food or groceries only?
+4. Tamil dish names alongside English? Name "Annam" OK?
 
 ## 13. Review log
 
@@ -420,3 +447,9 @@ slots fill from want; ₹55 default per meal; Annam/lifeD ownership written
 down; "Before Day 1" inputs and pass criteria for each spike. Reviewer's
 verdict: no substantive factual claim found wrong; ready for Day 1 with these
 edits.
+
+**Owner answers (2026-11-01):** diet open (veg/egg/non-veg); low-residue
+only in flares; ≤ 2 Instagram accounts; YouTube needs no account work (share
+URLs; share a playlist URL to import old saves); servings default 1 with sane
+scaling; cooking mode with multiple timers (minutes or whistles) and a
+Scale / Tumbler / Ratio measure toggle; treat mode for "something really good".
