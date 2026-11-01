@@ -1,7 +1,8 @@
-# Solo Leveling — level-up layer of lifeD (plan v5)
+# Solo Leveling — level-up layer of lifeD (plan v6)
 
-Status: **plan only, no code.** v5 = v4 + review round 4, rebased on lifeD's
-*live* code. History: §13.
+Status: **plan only, no code.** v6 = v5 + owner answers (gym + home, anime
+stats, the Daily Quest goal) + "everything changeable by chat". History: §13.
+lifeD records: goal **#470** (the Daily Quest), project **#471** (this build).
 
 ---
 
@@ -27,9 +28,16 @@ Status: **plan only, no code.** v5 = v4 + review round 4, rebased on lifeD's
    DESIGN), with TypeScript constants and tests — not disguised as "generic
    engines" with schemas hidden in rule records.
 5. **No server-side LLM in L1** (lifeD's own rule: "the AI understands, the
-   server structures"). A share is saved raw; Claude structures it in your
-   next chat. Whether Gemma may structure on the server (useful for a
-   500-reel backlog) is **your decision** (§12 Q1), taken in L2.
+   server structures"; you said yes to keeping it for now). A share is saved
+   raw; Claude structures it in your next chat. Gemma for the 500-reel
+   backlog is re-decided in L2.
+6. **Everything is changeable by talking.** Code holds the *shape* (Zod
+   schema), the *defaults* and the tests. Every number you might want to change
+   — quest ladder, rank-up rule, XP weights, stat sources, ranker weights,
+   phase rules, avoids, `have`, quiet hours — lives in an unpinned record that
+   overrides the default. "Make the quest 80 push-ups" or "count cycling as
+   AGI" is one `write`; an edit that doesn't fit the schema is refused with a
+   message that says why, so nothing breaks silently.
 
 ## 1. Name and theme
 
@@ -97,6 +105,48 @@ gains "N shares waiting — structure them?".
 
 ## 4. Training
 
+### 4.1 The Daily Quest (goal #470) — starts in week 1, not after L3
+
+Goal: 100 push-ups · 100 sit-ups · 100 squats · 10 km — by January 2027.
+Gym and home both, so the quest needs no equipment; gym days add strength work.
+
+**Rank ladder** (anime hunter ranks; every number editable by chat):
+
+| Rank | Push-ups | Sit-ups | Squats | Distance |
+| :-- | --: | --: | --: | --: |
+| E | 20 | 20 | 30 | 2 km |
+| D | 35 | 35 | 50 | 3 km |
+| C | 50 | 50 | 70 | 4–5 km |
+| B | 70 | 70 | 85 | 6 km |
+| A | 85 | 85 | 100 | 8 km |
+| **S** | **100** | **100** | **100** | **10 km** |
+
+- Reps in any number of sets through the day. Knee/incline push-ups count up
+  to C; full push-ups from B.
+- **Start rank** from a baseline on day 1: max push-ups, sit-ups, squats (2 min
+  each), and an easy 2 km run/walk.
+- **Rank up** next Monday when you clear ≥ 5 of the week's quest days (flare
+  and planned rest days are left out of the count). **Never rank down.**
+  E→S in 6 steps fits the 9 weeks from Nov 3 to Jan 4 with a week to spare.
+- **Distance, honestly:** 10 km of *running every day* is ~70 km a week —
+  months of build-up for most people, and riskier with Crohn's, low iron
+  (injection still pending, #438) and low vitamin D (bone stress). So the
+  daily quest counts **10 km moved** (run + walk, ~13k steps), with the
+  *running* part growing about 10–15 % a week. **January milestone = one full
+  S-rank day: 100/100/100 + 10 km run (run-walk allowed).** Daily 10 km
+  *running* becomes the next goal when you say so.
+- **Body first:** a quick OK from your doctor before starting. Sit-ups → dead
+  bugs or planks if your gut complains. Abdominal pain or a flare → stop;
+  that day is a **Recovery Quest** and still counts. One or two rest days a
+  week are quest days too.
+- **Logging:** "quest: 50/50/70, 4.2 km" → one `write` → a `quest` event
+  (a `form` record, zero code). Run distance from any phone app, typed or
+  later via Health Connect.
+- **The System for the quest (small code, L1b):** the 08:00 push carries
+  today's quest at your rank; rank-ups are announced ("[SYSTEM] Rank up: D → C").
+
+### 4.2 Gym and strength
+
 - **Logging from L1, zero code:** "push day: bench 3×8 @ 40, OHP 3×10 @ 20" →
   one `write` → `workout` event with per-exercise refs.
 - Workout reels → `inbox` → Claude makes `routine`/`exercise` records.
@@ -119,9 +169,11 @@ gains "N shares waiting — structure them?".
   you'd learn to inflate them). No XP for weight, no intake-amount quests
   ("log your meals", never "eat 80 g protein") — restrictive eating is a real
   risk with IBD and flares cut appetite.
-- **Stats:** STR (strength sessions, PRs) · AGI (cardio, steps, mobility) ·
-  VIT (meals logged, sleep logged, meds taken) · SEN (check-ins, journal) ·
-  INT (lifeD work tasks) **off by default** (§12 Q5).
+- **Stats (the anime set, kept):** STR (quest push-ups/squats, strength
+  sessions, PRs) · AGI (quest distance, cardio, mobility) · VIT (sit-ups/core,
+  meals logged, sleep logged, meds taken) · SEN (check-ins, journal) · INT
+  (lifeD tasks done, learning — **on**; never lowers anything; "stop counting
+  work" by chat turns it off).
 - **Never goes down:** a nightly rollup stores XP per day (rebuildable);
   today is computed live. Level = max(high-water mark, computed). XP-table
   changes apply from today, versioned.
@@ -161,8 +213,13 @@ or a widget.
 **Day 1 — spikes:** 20 reels through Browser Run (pass = ≥ 14 full captions);
 phone share tests (link → inbox; screenshot path).
 
+**Quest track (parallel, from week 1 — the January deadline can't wait):**
+`quest` form + rank-ladder record seeded on day 1 (zero code; Claude reads the
+ladder and your logs and tells you today's quest). **L1b (~1 day):** today's
+quest + rank in the 08:00 push and in `context()`; rank-up rule; announcement.
+
 **L1 — capture + log (~2 days):** kinds + forms seeded (recipe, exercise,
-routine; meal, workout, checkin); share URL → `inbox` + raw fetch; `urls`
+routine; meal, workout, checkin, quest); share URL → `inbox` + raw fetch; `urls`
 dedupe; `source` tool; Recipe page with "Cooked it"; one pinned pointer rule.
 *Done when:* 10 real shares → saved raw, Claude turns ≥ 8 into recipes in one
 chat; meals, workouts and check-ins log by chat.
@@ -196,17 +253,16 @@ quests, Status screen, guardrails.
 
 ## 12. Questions only you can answer
 
-1. **Server-side AI:** lifeD's founding rule is "no server-side LLM". Keep it
-   (shares wait for your next chat; backlog is structured by Claude in
-   batches), or allow Gemma 4 on the server just for structuring shares and the
-   backlog (≈ cents/month)? I'd keep the rule for L1 and decide in L2 after
-   seeing how the waiting feels.
-2. Foods your doctor told you to avoid? OK with the grapefruit + food-safety defaults?
-3. Kitchen kit, weighing scale, tumbler size; training at gym, home or both, and equipment?
-4. Protein target, weight goal; is ₹5k/month all food or groceries only?
-5. Should work (INT) count toward your level? (Off by default.)
-6. Who should the System suggest you talk to on a low stretch?
-7. Keep the anime stats (STR, AGI, VIT, INT, SEN) or rename?
+Answered: no server-side AI in L1 (re-decide for the backlog in L2); gym +
+home; anime stats kept; INT counts work; first goal = the Daily Quest by
+January (#470); everything tunable by chat.
+
+Still open (all have defaults; change any time by chat):
+1. Foods or exercises your doctor told you to avoid? OK with the grapefruit +
+   food-safety defaults, and a quick doctor OK for the quest?
+2. Kitchen kit, weighing scale, tumbler size; gym equipment you use?
+3. Protein target, weight goal; is ₹5k/month all food or groceries only?
+4. Who should the System suggest you talk to on a low stretch?
 
 ## 13. History
 
@@ -228,3 +284,9 @@ quests, Status screen, guardrails.
   tool count from 5. **Added by planner:** lifeD's live code is on
   `ccr-7a2881ef-38kr1m`, not `main`; its *formats as data* makes the
   meal/workout/check-in forms zero-code.
+- **v6 (owner answers):** gym + home; anime stats kept, INT on; Daily Quest
+  goal (#470) with an E→S rank ladder starting week 1 in parallel; "10 km
+  moved" daily with a January S-rank day as the milestone; everything tunable
+  by chat (code = schema + defaults + tests, records = overrides). lifeD
+  records #470/#471 created. Moving this plan into lifeD's `docs/` needs push
+  access to `omesh7/lifed`, which this session was denied.
